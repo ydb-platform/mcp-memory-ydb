@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mcp-memory-ydb"
+version = "0.1.0"
+description = "MCP long-term memory server backed by YDB Serverless — built on mem0, works with any OpenAI-compatible LLM/embeddings"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [
+    {name = "Yandex LLC", email = "ydb@yandex-team.ru"}
+]
+keywords = ["mcp", "memory", "ydb", "mem0", "llm", "embeddings", "rag", "vector-search"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "ydb-mcp",
+    "langchain-ydb>=0.0.16",
+    "mem0ai>=2.0.6",
+    "langchain-community>=0.3.31",
+    "langchain-openai",
+    "openai",
+    "python-dotenv",
+    "ydb[yc]",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.scripts]
+mcp-memory-ydb = "mcp_memory_ydb:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["mcp_memory_ydb"]

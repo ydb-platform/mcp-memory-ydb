@@ -1,0 +1,19 @@
+# Secrets — config and service-account keys
+*.env
+!*.env.example
+authorized_key.json
+*sa-key*.json
+*service*account*.json
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.pytest_cache/
+
+.idea/
+.vscode/
+*.iml
