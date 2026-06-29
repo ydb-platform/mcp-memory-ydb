@@ -1,9 +1,9 @@
 """
 Long-term memory MCP server backed by YDB Serverless.
 
-Built on ydb-mcp: disables the SQL tools and adds
-memory_search / memory_save. Works with any OpenAI-compatible
-LLM/embeddings provider (OpenAI, Ollama, Yandex Cloud, …).
+Built on ydb-mcp: disables the SQL tools and adds four memory tools —
+memory_search / memory_save / memory_delete / memory_update. Works with any
+OpenAI-compatible LLM/embeddings provider (OpenAI, Ollama, Yandex Cloud, …).
 
 Environment variables
 ──────────────────────────────────────────────────────────────────────────────
