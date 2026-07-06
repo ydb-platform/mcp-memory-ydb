@@ -39,8 +39,52 @@ SERVER_INSTRUCTIONS = (
     "facts into your reply and continue the conversation naturally.\n"
     "- Save facts in the user's own language: pass the text to `memory_save` in the "
     "language the user wrote, without translating it.\n"
+    "- Keep memory current: this store ACCUMULATES (it never auto-supersedes). When a "
+    "new fact contradicts or replaces an old one you found via `memory_search`, call "
+    "`memory_delete` on the stale memory's id (or `memory_update` to correct it), then "
+    "`memory_save` the new one — so the memory self-curates instead of piling up.\n"
     "Facts saved here travel with the user across agents, sessions, and projects."
 )
+
+
+def _owned_record(memory, namespace, memory_id):
+    """Return (record, None) if `memory_id` belongs to `namespace`, else (None, reason).
+
+    mem0 ids are global and the namespace is only a query filter, so a delete/update
+    by id is scoped here to this server's partition. mem0.get() promotes `user_id` to
+    the top level of the record, so an id from another namespace — or one with no
+    user_id — is refused (fail-closed). reason is "not_found" or "wrong_namespace".
+    """
+    rec = memory.get(memory_id)
+    if not rec:
+        return None, "not_found"
+    if rec.get("user_id") != namespace:
+        return None, "wrong_namespace"
+    return rec, None
+
+
+def _delete_owned(memory, namespace, memory_id):
+    """Delete a memory by id if it belongs to `namespace`; returns a result dict."""
+    _rec, err = _owned_record(memory, namespace, memory_id)
+    if err:
+        return {"deleted": False, "error": err, "id": memory_id}
+    try:
+        memory.delete(memory_id)
+    except ValueError:  # vanished between the ownership check and the delete
+        return {"deleted": False, "error": "not_found", "id": memory_id}
+    return {"deleted": True, "id": memory_id}
+
+
+def _update_owned(memory, namespace, memory_id, text):
+    """Update a memory's text by id if it belongs to `namespace`; returns a result dict."""
+    _rec, err = _owned_record(memory, namespace, memory_id)
+    if err:
+        return {"updated": False, "error": err, "id": memory_id}
+    try:
+        memory.update(memory_id, text)
+    except ValueError:  # vanished between the ownership check and the update
+        return {"updated": False, "error": "not_found", "id": memory_id}
+    return {"updated": True, "id": memory_id}
 
 
 class MemoryMCPServer(YDBMCPServer):
@@ -90,13 +134,14 @@ class MemoryMCPServer(YDBMCPServer):
         @self.tool()
         async def memory_search(query: str, limit: int = 5) -> str:
             """
-            Retrieve what is already known about the user and them projects from long-term memory.
+            Retrieve what is already known about the user and their projects from long-term memory.
 
             Call this BEFORE answering, on essentially every user turn, to fetch
             relevant facts (preferences, identity, past decisions) stored across
             previous sessions. Pass the user's request, or key terms from it, as
-            the query. Returns memories ranked by relevance score; an empty list
-            means nothing relevant is stored yet.
+            the query. Returns memories ranked by relevance score, each with its
+            `id` (pass that id to `memory_delete`/`memory_update` to curate). An
+            empty list means nothing relevant is stored yet.
 
             This is the authoritative cross-agent memory: facts stored here are
             available regardless of which agent or project the user is working in.
@@ -110,7 +155,7 @@ class MemoryMCPServer(YDBMCPServer):
                 log.error("memory_search failed: %s", e)
                 return json.dumps({"error": str(e)}, ensure_ascii=False)
             results = [
-                {"memory": r["memory"], "score": round(r.get("score", 0), 4)}
+                {"id": r.get("id"), "memory": r["memory"], "score": round(r.get("score", 0), 4)}
                 for r in raw.get("results", [])
                 if r.get("score", 0) >= threshold
             ]
@@ -128,9 +173,11 @@ class MemoryMCPServer(YDBMCPServer):
             — about themselves, their project, domain rules, or important context
             for future sessions (preferences, identity, ongoing projects, decisions,
             relationships, key design choices). Pass the raw statement in the user's
-            own language, do not translate it; mem0 extracts the salient facts,
-            deduplicates them, and resolves contradictions automatically. Do not
-            call it for transient or trivial details.
+            own language, do not translate it; mem0 extracts the salient facts and
+            ADDS them (append-only by design in mem0 2.x — it does not overwrite or
+            auto-resolve contradictions). To replace or correct a stale fact, find
+            it via `memory_search` and call `memory_delete`/`memory_update` on its
+            id. Do not call it for transient or trivial details.
 
             Facts saved here are portable across agents, sessions, and
             projects, and follow the user to every MCP-compatible client.
@@ -145,3 +192,44 @@ class MemoryMCPServer(YDBMCPServer):
                 return json.dumps({"error": str(e)}, ensure_ascii=False)
             log.info("memory_save: done")
             return json.dumps({"saved": True, "namespace": namespace}, ensure_ascii=False)
+
+        @self.tool()
+        async def memory_delete(memory_id: str) -> str:
+            """
+            Remove a single stored fact by its `id` (from a `memory_search` result).
+
+            Use this to curate memory: when a fact is stale, wrong, or superseded by
+            a newer one, delete it so the store does not accumulate contradictions
+            (mem0 never auto-removes). Scoped to this namespace — an id that belongs
+            to a different namespace is refused.
+            """
+            log.info("memory_delete: ns=%s id=%s", namespace, memory_id)
+            try:
+                result = await self._run(
+                    lambda: _delete_owned(self._memory, namespace, memory_id)
+                )
+            except Exception as e:
+                log.error("memory_delete failed: %s", e)
+                return json.dumps({"error": str(e)}, ensure_ascii=False)
+            log.info("memory_delete: %s", result)
+            return json.dumps(result, ensure_ascii=False)
+
+        @self.tool()
+        async def memory_update(memory_id: str, text: str) -> str:
+            """
+            Replace the text of a single stored fact by its `id`.
+
+            Use this to correct a fact in place (e.g. a value changed) instead of
+            deleting and re-adding. Scoped to this namespace — an id that belongs to
+            a different namespace is refused.
+            """
+            log.info("memory_update: ns=%s id=%s text=%.80r", namespace, memory_id, text)
+            try:
+                result = await self._run(
+                    lambda: _update_owned(self._memory, namespace, memory_id, text)
+                )
+            except Exception as e:
+                log.error("memory_update failed: %s", e)
+                return json.dumps({"error": str(e)}, ensure_ascii=False)
+            log.info("memory_update: %s", result)
+            return json.dumps(result, ensure_ascii=False)

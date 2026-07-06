@@ -1,11 +1,11 @@
 # mcp-memory-ydb
 
 Long-term memory MCP server for AI agents. It uses [mem0](https://github.com/mem0ai/mem0)
-to turn raw text into deduplicated facts and [YDB Serverless](https://yandex.cloud/en/services/ydb)
+to turn raw text into extracted facts and [YDB Serverless](https://yandex.cloud/en/services/ydb)
 as the vector store behind them.
 
 Built on top of [`ydb-mcp`](https://github.com/ydb-platform/ydb-mcp) (Yandex's MCP
-server for YDB): the generic SQL tools are switched off and replaced with two
+server for YDB): the generic SQL tools are switched off and replaced with four
 memory tools. Works with any OpenAI-compatible LLM/embeddings provider (OpenAI,
 Ollama, Yandex Cloud, …).
 
@@ -13,16 +13,19 @@ Ollama, Yandex Cloud, …).
 
 | Tool | Description |
 |------|-------------|
-| `memory_search(query, limit)` | Semantic search across the namespace's memory |
-| `memory_save(text)` | Save a fact — mem0 extracts and deduplicates it |
+| `memory_search(query, limit)` | Semantic search across the namespace's memory; each match carries its `id` |
+| `memory_save(text)` | Save a fact — mem0 extracts it and adds it (append-only) |
+| `memory_delete(memory_id)` | Remove a stale/superseded fact by its `id` |
+| `memory_update(memory_id, text)` | Replace the text of a fact by its `id` |
 
 ## How it works
 
 `memory_save` does not just store the text you give it. It hands that text to
-**mem0**, which calls your LLM to extract the salient facts, deduplicate them
-against what is already stored, and resolve contradictions (so "I use Postgres"
-later overwrites "I use MySQL" instead of piling up). Each resulting fact is
-embedded and written to YDB.
+**mem0**, which calls your LLM to extract the salient facts. In mem0 2.x this is
+**append-only**: facts accumulate and are not auto-overwritten or de-duplicated
+away. To replace or correct a stale fact, find it via `memory_search` and call
+`memory_delete` / `memory_update` with its `id`. Each extracted fact is embedded
+and written to YDB.
 
 **Language of stored facts.** mem0's extraction prompt is English, so out of the
 box facts are stored in English even if the user writes another language. To keep
@@ -42,14 +45,13 @@ untouched unless you opt in.
 facts in YDB, returning the closest matches above `MEMORY_THRESHOLD`.
 
 ```
-text ─▶ mem0 (LLM: extract + dedup) ─▶ embeddings ─▶ YDB vector store
+text ─▶ mem0 (LLM: extract, append-only) ─▶ embeddings ─▶ YDB vector store
                                                           │
 query ─▶ embeddings ─▶ cosine search ◀────────────────────┘
 ```
 
-- **mem0** — fact extraction, deduplication, contradiction resolution. This is a
-  required dependency, not an optional layer; it is what makes the memory smart
-  rather than an append-only log.
+- **mem0** — fact extraction and embedding (append-only in 2.x; curate stale facts
+  via `memory_delete` / `memory_update`). A required dependency, not an optional layer.
 - **[langchain-ydb](https://github.com/ydb-platform/langchain-ydb)** — the vector
   store; embeds facts and runs similarity search in YDB.
 - **YDB Serverless** — the database that holds the vectors and metadata.
@@ -152,7 +154,7 @@ To confirm it works, test it through a conversation. The flow is the same in
 Claude Code, Cursor, and VS Code:
 
 1. **Verify the server is connected.**
-   - Claude Code: run `/mcp` — `memory-ydb` should be listed with its two tools.
+   - Claude Code: run `/mcp` — `memory-ydb` should be listed with its four tools.
    - Cursor / VS Code: open the MCP settings panel — `memory-ydb` should show a
      connected status.
 2. **Teach it a fact.** Say:
