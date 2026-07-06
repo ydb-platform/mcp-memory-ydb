@@ -109,4 +109,5 @@ def run_setup() -> None:
     print("If your client ignores them, add this to the agent's system prompt:")
     print("   Before answering, call memory_search for relevant context.")
     print("   After answering, call memory_save if you learned something important.")
+    print("   When a new fact supersedes an old one, memory_delete / memory_update its id.")
     print("─" * 60)
