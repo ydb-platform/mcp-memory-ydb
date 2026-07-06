@@ -39,10 +39,13 @@ SERVER_INSTRUCTIONS = (
     "facts into your reply and continue the conversation naturally.\n"
     "- Save facts in the user's own language: pass the text to `memory_save` in the "
     "language the user wrote, without translating it.\n"
-    "- Keep memory current: this store ACCUMULATES (it never auto-supersedes). When a "
-    "new fact contradicts or replaces an old one you found via `memory_search`, call "
-    "`memory_delete` on the stale memory's id (or `memory_update` to correct it), then "
-    "`memory_save` the new one — so the memory self-curates instead of piling up.\n"
+    "- Keep memory current: this store ACCUMULATES (it never auto-supersedes) and "
+    "`memory_save` never edits an existing record, it only appends. Before calling "
+    "`memory_save`, check whether `memory_search` already surfaced a memory that the "
+    "new information corrects or contradicts. If it did, call `memory_update` on that "
+    "memory's id with the corrected text and do NOT also call `memory_save` for the "
+    "same fact — `memory_update` alone replaces it in place. Use `memory_delete` only "
+    "when a fact is stale and is not being replaced by anything new.\n"
     "Facts saved here travel with the user across agents, sessions, and projects."
 )
 
@@ -167,7 +170,7 @@ class MemoryMCPServer(YDBMCPServer):
         @self.tool()
         async def memory_save(text: str) -> str:
             """
-            Persist durable information to long-term memory.
+            Persist durable information to long-term memory — for NEW facts only.
 
             Call this AFTER answering whenever the user revealed something durable
             — about themselves, their project, domain rules, or important context
@@ -175,9 +178,13 @@ class MemoryMCPServer(YDBMCPServer):
             relationships, key design choices). Pass the raw statement in the user's
             own language, do not translate it; mem0 extracts the salient facts and
             ADDS them (append-only by design in mem0 2.x — it does not overwrite or
-            auto-resolve contradictions). To replace or correct a stale fact, find
-            it via `memory_search` and call `memory_delete`/`memory_update` on its
-            id. Do not call it for transient or trivial details.
+            auto-resolve contradictions). Do not call it for transient or trivial details.
+
+            **CRITICAL:** If `memory_search` already returned a fact that contradicts
+            or is superseded by new information, do NOT call this. Instead, call
+            `memory_update` on that old fact's id with the corrected text. Never call
+            both `memory_update`/`memory_delete` AND `memory_save` for the same fact
+            — use only one. Use `memory_save` only when the fact is entirely new.
 
             Facts saved here are portable across agents, sessions, and
             projects, and follow the user to every MCP-compatible client.
@@ -196,12 +203,13 @@ class MemoryMCPServer(YDBMCPServer):
         @self.tool()
         async def memory_delete(memory_id: str) -> str:
             """
-            Remove a single stored fact by its `id` (from a `memory_search` result).
+            Remove a single stored fact by its `id` (from a `memory_search` result) — use only
+            when deleting with no replacement.
 
-            Use this to curate memory: when a fact is stale, wrong, or superseded by
-            a newer one, delete it so the store does not accumulate contradictions
-            (mem0 never auto-removes). Scoped to this namespace — an id that belongs
-            to a different namespace is refused.
+            Use this to curate memory when a fact is entirely stale or wrong and should be
+            removed, NOT replaced by new information. If you're correcting or replacing a fact
+            with new text, use `memory_update` instead. Scoped to this namespace — an id that
+            belongs to a different namespace is refused.
             """
             log.info("memory_delete: ns=%s id=%s", namespace, memory_id)
             try:
@@ -217,11 +225,13 @@ class MemoryMCPServer(YDBMCPServer):
         @self.tool()
         async def memory_update(memory_id: str, text: str) -> str:
             """
-            Replace the text of a single stored fact by its `id`.
+            Replace the text of a single stored fact by its `id` — use instead of memory_save
+            when correcting an existing fact.
 
-            Use this to correct a fact in place (e.g. a value changed) instead of
-            deleting and re-adding. Scoped to this namespace — an id that belongs to
-            a different namespace is refused.
+            When `memory_search` surfaces an existing fact that is now stale, wrong, or
+            superseded, call this to replace it with corrected text. Use this instead of
+            the `memory_delete`/`memory_save` combination for the same fact. Scoped to this
+            namespace — an id that belongs to a different namespace is refused.
             """
             log.info("memory_update: ns=%s id=%s text=%.80r", namespace, memory_id, text)
             try:
